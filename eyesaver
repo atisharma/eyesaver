@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+
+# Set monitor brightness and colour temp according to sunrise, sunset
+# depends on sunwait, perl, ddcutil
+# RGB values calculated according to
+# https://www.tannerhelland.com/4435/convert-temperature-rgb-algorithm-code/
+# Call every half hour or so for a smooth transition.
+#
+# eyesaver (C) 2019 A S Sharma
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+
+LAT=53.3833
+LONG=1.4667
+
+SMOOTHNESS=100
+
+# brightness floor and ceiling
+FLOOR=40
+CEIL=90
+
+# colour temperatures in K
+TEMP_FLOOR=3000
+TEMP_CEIL=6500
+
+
+# get sunrise and sunset into bash string array
+times=($(sunwait -p ${LAT}N ${LONG}W | grep 'Civil twilight' | grep -o -E '[0-9]+'))
+
+# remove leading zeros so number not interpreted as octal
+now=$((10#$(date +%H%M)))
+sunrise=$((10#${times[0]}))
+sunset=$((10#${times[1]}))
+
+# brightness function, then scale
+brightness=$(perl -E "use Math::Trig; say (int((tanh(($now-$sunrise)/$SMOOTHNESS) - tanh(($now-$sunset)/$SMOOTHNESS)) / 2 * ($CEIL - $FLOOR) + $FLOOR))")
+
+# color temperature
+temp=$(perl -E "use Math::Trig; say (int((tanh(($now-$sunrise)/$SMOOTHNESS) - tanh(($now-$sunset)/$SMOOTHNESS)) / 2 * ($TEMP_CEIL - $TEMP_FLOOR) + $TEMP_FLOOR))")
+
+# RGB values
+red=$(perl -E "use List::Util qw[min max]; say max(0, min(255, int(329.6987 * ($temp/100 - 60) ** -0.1332047592)))")
+green=$(perl -E "use List::Util qw[min max]; say max(0, min(255, int(99.4708 * log($temp/100) - 161.119581)))")
+blue=$(perl -E "use List::Util qw[min max]; say max(0, min(255, int(138.51773 * log($temp/100 - 10) - 305.0447927)))")
+
+echo "Time is $now, sunrise is ${times[0]} and sunset is ${times[1]}."
+echo "Setting brightness to $brightness."
+echo "Setting colour temperature to $temp (RGB $red $green $blue)."
+
+# unfortunately the LG takes 0-100 rather than 0-255 for RGB
+# so it's hard to just loop over them
+
+ddcutil -g HWP setvcp 10 $brightness
+ddcutil -g GSM setvcp 10 $brightness
+
+ddcutil --async -g HWP setvcp 16 $red
+ddcutil --async -g GSM setvcp 16 $(($red * 100 / 255))
+ddcutil --async -g HWP setvcp 18 $green
+ddcutil --async -g GSM setvcp 18 $(($green * 100 / 255))
+ddcutil --async -g HWP setvcp 1a $blue
+ddcutil --async -g GSM setvcp 1a $(($blue * 100 / 255))
+
+# debugging / validation
+
+ddcutil --async -g HWP getvcp 16
+ddcutil --async -g HWP getvcp 18
+ddcutil --async -g HWP getvcp 1a
+
+ddcutil --async -g GSM getvcp 16
+ddcutil --async -g GSM getvcp 18
+ddcutil --async -g GSM getvcp 1a
