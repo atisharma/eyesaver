@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-
+#
 # Set monitor brightness and colour temp according to sunrise, sunset
 # depends on sunwait, perl, ddcutil
 # RGB values calculated according to
 # https://www.tannerhelland.com/4435/convert-temperature-rgb-algorithm-code/
 # Call every half hour or so for a smooth transition.
+# Monitors are automatically detected.
 #
 # eyesaver (C) 2019 A S Sharma
 #
@@ -28,13 +29,17 @@ LONG=1.4667
 SMOOTHNESS=100
 
 # brightness floor and ceiling
-FLOOR=40
-CEIL=90
+FLOOR=20
+CEIL=70
 
 # colour temperatures in K
 TEMP_FLOOR=3000
-TEMP_CEIL=6500
+TEMP_CEIL=6700
 
+# fraction of RGB value to be considered normall full
+RGB_CEIL=0.8
+
+CONTRAST=70
 
 # get sunrise and sunset into bash string array
 times=($(sunwait -p ${LAT}N ${LONG}W | grep 'Civil twilight' | grep -o -E '[0-9]+'))
@@ -50,34 +55,32 @@ brightness=$(perl -E "use Math::Trig; say (int((tanh(($now-$sunrise)/$SMOOTHNESS
 # color temperature
 temp=$(perl -E "use Math::Trig; say (int((tanh(($now-$sunrise)/$SMOOTHNESS) - tanh(($now-$sunset)/$SMOOTHNESS)) / 2 * ($TEMP_CEIL - $TEMP_FLOOR) + $TEMP_FLOOR))")
 
-# RGB values
-red=$(perl -E "use List::Util qw[min max]; say max(0, min(255, int(329.6987 * ($temp/100 - 60) ** -0.1332047592)))")
-green=$(perl -E "use List::Util qw[min max]; say max(0, min(255, int(99.4708 * log($temp/100) - 161.119581)))")
-blue=$(perl -E "use List::Util qw[min max]; say max(0, min(255, int(138.51773 * log($temp/100 - 10) - 305.0447927)))")
+# RGB values in [0, 255]
+red=$(perl -E "use List::Util qw[min max]; say max(0, min(255, int($RGB_CEIL * (329.6987 * ($temp/100 - 60) ** -0.1332047592))))")
+green=$(perl -E "use List::Util qw[min max]; say max(0, min(255, int($RGB_CEIL * (99.4708 * log($temp/100) - 161.119581))))")
+blue=$(perl -E "use List::Util qw[min max]; say max(0, min(255, int($RGB_CEIL * (138.51773 * log($temp/100 - 10) - 305.0447927))))")
 
 echo "Time is $now, sunrise is ${times[0]} and sunset is ${times[1]}."
 echo "Setting brightness to $brightness."
 echo "Setting colour temperature to $temp (RGB $red $green $blue)."
 
-# unfortunately the LG takes 0-100 rather than 0-255 for RGB
-# so it's hard to just loop over them
+# detect monitors and get I2C bus number
+for monitor in $(ddcutil detect --terse | grep I2C | sed -e 's/.*-//')
+do
+	ddcutil -b ${monitor} setvcp 12 $CONTRAST
+	ddcutil -b ${monitor} setvcp 10 $brightness
 
-ddcutil -g HWP setvcp 10 $brightness
-ddcutil -g GSM setvcp 10 $brightness
+	# unfortunately some take 0-100 and some 0-255 for RGB
+	# so we must scale to monitor's native scale
+	max=$(ddcutil -b ${monitor} -t getvcp 16 | cut -d ' ' -f 5)
 
-ddcutil --async -g HWP setvcp 16 $red
-ddcutil --async -g GSM setvcp 16 $(($red * 100 / 255))
-ddcutil --async -g HWP setvcp 18 $green
-ddcutil --async -g GSM setvcp 18 $(($green * 100 / 255))
-ddcutil --async -g HWP setvcp 1a $blue
-ddcutil --async -g GSM setvcp 1a $(($blue * 100 / 255))
+	# apply colour temperature
+	ddcutil --async -b ${monitor} setvcp 16 $(($red * $max / 255))
+	ddcutil --async -b ${monitor} setvcp 18 $(($green * $max / 255))
+	ddcutil --async -b ${monitor} setvcp 1a $(($blue * $max / 255))
 
-# debugging / validation
-
-ddcutil --async -g HWP getvcp 16
-ddcutil --async -g HWP getvcp 18
-ddcutil --async -g HWP getvcp 1a
-
-ddcutil --async -g GSM getvcp 16
-ddcutil --async -g GSM getvcp 18
-ddcutil --async -g GSM getvcp 1a
+	# debugging / validation
+	ddcutil --async -b ${monitor} getvcp 16
+	ddcutil --async -b ${monitor} getvcp 18
+	ddcutil --async -b ${monitor} getvcp 1a
+done
