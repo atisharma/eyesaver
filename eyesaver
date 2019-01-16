@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 #
 # Set monitor brightness and colour temp according to sunrise and sunset.
-# Depends on sunwait, perl, ddcutil, grep and sed.
+#
+# --- Dependencies ---
+# sunwait, perl, ddcutil, grep and sed.
+# Also you need to have the permissions of /dev/i2c-x devices set to rw as
+# per ddcutil documentation.
+#
 # RGB values are calculated according to something like
 # https://www.tannerhelland.com/4435/convert-temperature-rgb-algorithm-code/
 # Call from cron every twenty minutes or so for a smooth transition.
@@ -23,30 +28,38 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #### USER-SET VARIABLES ####
+
 # your location
 LAT=53.3833
 LONG=1.4667
 
-# slope of the sigmoid function
-# higher values means smoother transition between day and night
+# slope of the sigmoid function;
+# higher values means smoother transition between day and night values
 SMOOTHNESS=100
 
 # brightness floor and ceiling
 FLOOR=30
-CEIL=70
+CEIL=50
 
 # colour temperatures in K
-TEMP_FLOOR=3000
-TEMP_CEIL=6700
+TEMP_FLOOR=4500
+TEMP_CEIL=6600
 
 # fraction of RGB value to be considered normally full
 RGB_SCALING=0.7
 
-CONTRAST=70
+CONTRAST=50
 
 DEBUG=false
 
 #### END USER-SET VARIABLES ####
+
+# test for dependencies
+test -z $(which ddcutil) && echo "ddcutil needs to be installed"
+test -z $(which jq) && echo "jq needs to be installed"
+test -z $(which sunwait) && echo "sunwait needs to be installed"
+test -z $(which perl) && echo "perl needs to be installed"
+
 
 # get sunrise and sunset into bash string array
 times=($(sunwait -p ${LAT}N ${LONG}W | grep 'Civil twilight' | grep -o -E '[0-9]+'))
@@ -60,7 +73,7 @@ sunset=$((10#${times[1]}))
 # brightness sigmoid function, then scale
 brightness=$(perl -E "use Math::Trig; say (int((tanh(($now-$sunrise)/$SMOOTHNESS) - tanh(($now-$sunset)/$SMOOTHNESS)) / 2 * ($CEIL - $FLOOR) + $FLOOR))")
 
-# color temperature
+# similarly, color temperature
 temp=$(perl -E "use Math::Trig; say (int((tanh(($now-$sunrise)/$SMOOTHNESS) - tanh(($now-$sunset)/$SMOOTHNESS)) / 2 * ($TEMP_CEIL - $TEMP_FLOOR) + $TEMP_FLOOR))")
 
 # RGB values in [0, 255]
